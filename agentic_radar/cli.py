@@ -103,6 +103,31 @@ def scan(
             envvar="AGENTIC_RADAR_EXPORT_GRAPH_JSON",
         ),
     ] = False,
+    # n8n-specific options
+    n8n_connected_only: Annotated[
+        bool,
+        typer.Option(
+            "--n8n-connected-only",
+            help="[n8n only] Only analyze workflows with connected nodes",
+            is_flag=True,
+        ),
+    ] = False,
+    n8n_langchain_only: Annotated[
+        bool,
+        typer.Option(
+            "--n8n-langchain-only",
+            help="[n8n only] Only analyze workflows that contain LangChain nodes",
+            is_flag=True,
+        ),
+    ] = False,
+    n8n_use_positions: Annotated[
+        bool,
+        typer.Option(
+            "--n8n-use-positions",
+            help="[n8n only] Use position data from n8n workflows to maintain the original layout",
+            is_flag=True,
+        ),
+    ] = False,
 ):
     if not os.path.isdir(input_directory):
         print(f"Input directory '{input_directory}' does not exist.")
@@ -114,22 +139,17 @@ def scan(
     elif framework == AgenticFramework.crewai:
         analyzer = CrewAIAnalyzer()
     elif framework == AgenticFramework.n8n:
-        # Check for n8n-specific environment variables
-        connected_only = os.getenv("N8N_CONNECTED_ONLY", "false").lower() == "true"
-        langchain_only = os.getenv("N8N_LANGCHAIN_ONLY", "false").lower() == "true"
-        use_n8n_positions = os.getenv("N8N_USE_POSITIONS", "false").lower() == "true"
-        
-        if connected_only:
+        if n8n_connected_only:
             print("n8n: Connected-only mode enabled")
-        if langchain_only:
+        if n8n_langchain_only:
             print("n8n: LangChain-only mode enabled")
-        if use_n8n_positions:
+        if n8n_use_positions:
             print("n8n: Using n8n node positions")
             
         analyzer = N8nAnalyzer(
-            connected_only=connected_only,
-            langchain_only=langchain_only,
-            use_n8n_positions=use_n8n_positions
+            connected_only=n8n_connected_only,
+            langchain_only=n8n_langchain_only,
+            use_n8n_positions=n8n_use_positions
         )
     elif framework == AgenticFramework.openai_agents:
         analyzer = OpenAIAgentsAnalyzer()
