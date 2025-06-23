@@ -114,7 +114,23 @@ def scan(
     elif framework == AgenticFramework.crewai:
         analyzer = CrewAIAnalyzer()
     elif framework == AgenticFramework.n8n:
-        analyzer = N8nAnalyzer()
+        # Check for n8n-specific environment variables
+        connected_only = os.getenv("N8N_CONNECTED_ONLY", "false").lower() == "true"
+        langchain_only = os.getenv("N8N_LANGCHAIN_ONLY", "false").lower() == "true"
+        use_n8n_positions = os.getenv("N8N_USE_POSITIONS", "false").lower() == "true"
+        
+        if connected_only:
+            print("n8n: Connected-only mode enabled")
+        if langchain_only:
+            print("n8n: LangChain-only mode enabled")
+        if use_n8n_positions:
+            print("n8n: Using n8n node positions")
+            
+        analyzer = N8nAnalyzer(
+            connected_only=connected_only,
+            langchain_only=langchain_only,
+            use_n8n_positions=use_n8n_positions
+        )
     elif framework == AgenticFramework.openai_agents:
         analyzer = OpenAIAgentsAnalyzer()
     elif framework == AgenticFramework.autogen:
@@ -142,56 +158,83 @@ def analyze_and_generate_report(
     export_graph_json: bool = False,
 ):
     print(f"Analyzing {input_directory} for {framework} graphs")
-    graph = analyzer.analyze(input_directory)
-
-    if len(graph.nodes) <= 2:  # Only start and end nodes are present
+    result = analyzer.analyze(input_directory)
+    
+    # Handle both single GraphDefinition and list of GraphDefinitions
+    graphs = result if isinstance(result, list) else [result]
+    
+    if not graphs:
         print(
             f"Agentic Radar didn't find any agentic workflow in input directory: {input_directory}"
         )
         raise typer.Exit(code=1)
-    sanitize_graph(graph)
+    
+    for i, graph in enumerate(graphs):
+        if len(graph.nodes) <= 2:  # Only start and end nodes are present
+            print(f"Skipping workflow '{graph.name}' as it doesn't contain any agentic nodes")
+            continue
+            
+        sanitize_graph(graph)
 
-    if export_graph_json:
-        output_file = output_file.replace(".html", ".json")
-        with open(output_file, "w") as f:
-            f.write(graph.model_dump_json(indent=2))
-        print(f"Graph exported to {output_file}")
-        raise typer.Exit(code=0)
+        if export_graph_json:
+            # Generate unique filename for each workflow
+            if len(graphs) > 1:
+                base_name, ext = os.path.splitext(output_file.replace(".html", ".json"))
+                safe_name = "".join(c if c.isalnum() else "_" for c in graph.name)
+                json_output_file = f"{base_name}_{safe_name}.json"
+            else:
+                json_output_file = output_file.replace(".html", ".json")
+                
+            with open(json_output_file, "w") as f:
+                f.write(graph.model_dump_json(indent=2))
+            print(f"Graph exported to {json_output_file}")
+            if i == len(graphs) - 1:
+                raise typer.Exit(code=0)
+            continue
 
-    print("Mapping vulnerabilities")
-    map_vulnerabilities(graph)
+        print(f"Mapping vulnerabilities for workflow '{graph.name}'")
+        map_vulnerabilities(graph)
 
-    if harden_prompts:
-        if not os.getenv("OPENAI_API_KEY") and not os.getenv("AZURE_OPENAI_API_KEY"):
-            print(
-                "Hardening system prompts requires OPENAI_API_KEY or AZURE_OPENAI_API_KEY. "
-                "You can set it in .env file or as an environment variable."
-            )
-            raise typer.Exit(code=1)
-        print("Hardening system prompts")
-        pipeline = PromptHardeningPipeline([OpenAIGeneratorStep(), PIIProtectionStep()])
-        hardened_prompts = harden_agent_prompts(graph.agents, pipeline)
-    else:
-        hardened_prompts = {}
+        if harden_prompts:
+            if not os.getenv("OPENAI_API_KEY") and not os.getenv("AZURE_OPENAI_API_KEY"):
+                print(
+                    "Hardening system prompts requires OPENAI_API_KEY or AZURE_OPENAI_API_KEY. "
+                    "You can set it in .env file or as an environment variable."
+                )
+                raise typer.Exit(code=1)
+            print("Hardening system prompts")
+            pipeline = PromptHardeningPipeline([OpenAIGeneratorStep(), PIIProtectionStep()])
+            hardened_prompts = harden_agent_prompts(graph.agents, pipeline)
+        else:
+            hardened_prompts = {}
 
-    pydot_graph = GraphDefinition(
-        framework=framework,
-        name=graph.name,
-        nodes=[
-            NodeDefinition.model_validate(n, from_attributes=True) for n in graph.nodes
-        ],
-        edges=[
-            EdgeDefinition.model_validate(e, from_attributes=True) for e in graph.edges
-        ],
-        agents=[Agent.model_validate(a, from_attributes=True) for a in graph.agents],
-        tools=[
-            NodeDefinition.model_validate(t, from_attributes=True) for t in graph.tools
-        ],
-        hardened_prompts=hardened_prompts,
-    )
-    print("Generating report")
-    generate(pydot_graph, output_file)
-    print(f"Report {output_file} generated")
+        pydot_graph = GraphDefinition(
+            framework=framework,
+            name=graph.name,
+            nodes=[
+                NodeDefinition.model_validate(n, from_attributes=True) for n in graph.nodes
+            ],
+            edges=[
+                EdgeDefinition.model_validate(e, from_attributes=True) for e in graph.edges
+            ],
+            agents=[Agent.model_validate(a, from_attributes=True) for a in graph.agents],
+            tools=[
+                NodeDefinition.model_validate(t, from_attributes=True) for t in graph.tools
+            ],
+            hardened_prompts=hardened_prompts,
+        )
+        
+        # Generate unique output file name for each workflow
+        if len(graphs) > 1:
+            base_name, ext = os.path.splitext(output_file)
+            safe_name = "".join(c if c.isalnum() else "_" for c in graph.name)
+            workflow_output_file = f"{base_name}_{safe_name}{ext}"
+        else:
+            workflow_output_file = output_file
+            
+        print(f"Generating report for workflow '{graph.name}'")
+        generate(pydot_graph, workflow_output_file)
+        print(f"Report {workflow_output_file} generated")
 
 
 @app.command(
